@@ -5,7 +5,7 @@ A command-line tool that lets an external participant deploy their own bitDS con
 It ships as a **zipapp**: a single 16 KB executable file. It does not bundle a Python interpreter, so the server needs Python 3.10 or newer, but it does not requires `pip`, or virtualenv an or root privileges.
 
 
-**No third-party dependencies.** Everything is standard library. This is what  makes the 16 KB single-file build possible.
+**No third-party dependencies.** Everything is standard library. 
 
 ## Requirements
 
@@ -34,6 +34,36 @@ connector generate --participant-id inferia --host 203.0.113.10 \
   --country esp --entity-type public \
   --registry-url https://registry.bitds.eu/api/
 ```
+
+-------------------------
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `generate` | Writes `provider_config_secret.properties`, `docker-compose.yml`, `claims.json` and an empty `vptoken.txt` into the current directory |
+| `up` | Pulls the images, starts the stack and waits until the connector is genuinely running |
+| `info` | Prints the connector details: identity, ports, API key, claims and public key |
+
+To see the accepted country codes:
+
+```bash
+./connector.pyz generate --list-countries   # the 27 EU countries, ISO alpha-3
+```
+
+The connector image defaults to `ghcr.io/bitds/provider-base:latest`, a public
+package that needs no registry credentials. `--image` overrides it if you ever need to deploy a specific build.
+
+Run `./connector.pyz <command> --help` for the full set of options.
+
+## Stopping, restarting and logs
+
+The tool does not wrap Docker, and it does not need to because  the deployment is an ordinary Compose project so every `docker compose` command works from inside the deployment directory.
+
+
+---------------- 
+
+### More details
 
 `generate` writes the connector configuration into the current directory, using the identity of the participant (`--participant-id`), the public address of the server (`--host`), the country and the entity type of the organisation, and the registry the connector will talk to. Run `connector generate --help` to see every accepted argument.
 
@@ -64,28 +94,6 @@ there: the connector would be configured next to the tool instead of in your dep
 
 `up` finishes by printing the **Ed25519 public key**. That key is what you send back to BITDS to register the participant.
 
-## Commands
-
-| Command | What it does |
-|---|---|
-| `generate` | Writes `provider_config_secret.properties`, `docker-compose.yml`, `claims.json` and an empty `vptoken.txt` into the current directory |
-| `up` | Pulls the images, starts the stack and waits until the connector is genuinely running |
-| `info` | Prints the connector details: identity, ports, API key, claims and public key |
-
-To see the accepted country codes:
-
-```bash
-./connector.pyz generate --list-countries   # the 27 EU countries, ISO alpha-3
-```
-
-The connector image defaults to `ghcr.io/bitds/provider-base:latest`, a public
-package that needs no registry credentials. `--image` overrides it if you ever need to deploy a specific build.
-
-Run `./connector.pyz <command> --help` for the full set of options.
-
-## Stopping, restarting and logs
-
-The tool does not wrap Docker, and it does not need to because  the deployment is an ordinary Compose project so every `docker compose` command works from inside the deployment directory.
 
 
 
@@ -97,7 +105,7 @@ There is one command that loses data:
 docker compose down -v              # ALSO deletes the PostgreSQL volume
 ```
 
-`-v` deletes the database volume, and with it the whole state of the connector assets, contract definitions, policies and negotiations. The Ed25519 keys are not in the volume, they are files in the deployment directory, so the participant identity survives even this. 
+`-v` deletes the database volume, and with it the whole state of the connector assets, contract definitions, policies and negotiations. The Ed25519 keys are not in the volume, they are files in the deployment directory.
 
 You need `-v`  when regenerating the configuration of a directory that has already run, because `generate` issues a new database password and the existing volume would keep rejecting it.
 
@@ -121,7 +129,7 @@ ed25519_public.pem                  participant public key
 
 The private key never leaves the server. Only the public key is sent to BITDS.
 
-## How it works
+
 
 The tool carries a base `.properties` file with placeholder values and rewrites about twenty keys with the config values for this particular deployment. 
 

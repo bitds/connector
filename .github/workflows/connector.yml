@@ -1,0 +1,115 @@
+name: Connector package
+
+# El .pyz no se versiona: se construye aqui. En cada push a connector/ se
+# comprueba que sigue construyendo y funcionando, y al publicar una release
+# con tag connector-v* se adjunta el binario junto a su SHA-256.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - '.github/workflows/connector.yml'
+      - 'connector/**'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: connector-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and smoke test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # El minimo que promete el README y la ultima estable: el zipapp no
+        # lleva interprete, asi que corre con el Python que haya en el servidor.
+        python: ['3.10', '3.13']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build
+        run: connector/build.sh
+
+      - name: Verify checksum
+        run: cd connector/dist && sha256sum -c connector.pyz.sha256
+
+      - name: Smoke test
+        env:
+          PYZ: ${{ github.workspace }}/connector/dist/connector.pyz
+        run: |
+          set -eu
+          "$PYZ" --help > /dev/null
+          "$PYZ" --version > /dev/null
+          "$PYZ" generate --list-countries > /dev/null
+
+          # Un despliegue de verdad en un directorio vacio: valida tambien las
+          # plantillas, que es donde un cambio rompe sin que el import falle.
+          cd "$(mktemp -d)"
+          "$PYZ" generate --participant-id ci-smoke --host 203.0.113.10 \
+                          --country esp --entity-type public \
+                          --registry-url https://registry.example.org/api/ --force
+          test -f docker-compose.yml
+          test -f claims.json
+          test "$(stat -c '%a' provider_config_secret.properties)" = 600
+          docker compose config -q
+          "$PYZ" info > /dev/null
+
+      - name: Upload artifact
+        if: matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: connector-pyz
+          path: |
+            connector/dist/connector.pyz
+            connector/dist/connector.pyz.sha256
+          retention-days: 14
+
+  publish:
+    name: Attach to release
+    needs: build
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'connector-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      # El tag es lo que sella la version dentro del binario: el .pyz que se
+      # descarga el participante tiene que saber de que release salio.
+      - name: Build
+        env:
+          CONNECTOR_VERSION: ${{ github.event.release.tag_name }}
+        run: connector/build.sh
+
+      # El .pyz y su checksum se suben juntos y de la misma construccion: el
+      # participante se descarga un ejecutable y lo corre, y lo unico que tiene
+      # para comprobar que es el que publicamos es ese SHA-256.
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$TAG" \
+            connector/dist/connector.pyz \
+            connector/dist/connector.pyz.sha256 \
+            --clobber --repo "$GITHUB_REPOSITORY"

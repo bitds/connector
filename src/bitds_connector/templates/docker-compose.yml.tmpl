@@ -1,0 +1,69 @@
+# Plantilla del stack del conector. La rellena generate.py con str.format(): los
+# marcadores entre llaves se sustituyen, y por eso el fichero no puede contener
+# ninguna otra llave literal. Los marcadores van entrecomillados para que la
+# plantilla siga siendo YAML valido tal cual.
+name: "{name}"
+
+secrets:
+  provider_config_secret:
+    file: ./provider_config_secret.properties
+
+volumes:
+  db-data:
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{db_name}"
+      POSTGRES_USER: "{db_user}"
+      POSTGRES_PASSWORD: "{db_password}"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {db_user} -d {db_name}"]
+      interval: 5s
+      retries: 10
+
+  key-init:
+    image: alpine/openssl:latest
+    restart: "no"
+    volumes:
+      - ./:/identity
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /identity/ed25519_private.pem ]; then
+          openssl genpkey -algorithm Ed25519 -out /identity/ed25519_private.pem
+          openssl pkey -in /identity/ed25519_private.pem -pubout -out /identity/ed25519_public.pem
+          chmod 600 /identity/ed25519_private.pem
+          chmod 644 /identity/ed25519_public.pem
+          echo "Claves generadas."
+        else
+          echo "Las claves ya existen."
+        fi
+
+  provider:
+    image: "{image}"
+    container_name: "provider-{name}"
+    restart: unless-stopped
+    depends_on:
+      key-init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+    ports:
+      - "{http}:{http}"
+      - "{management}:{management}"
+      - "{protocol}:{protocol}"
+      - "{public}:{public}"
+    secrets:
+      - provider_config_secret
+    volumes:
+      - ./:/identity
+    entrypoint: [
+      "java",
+      "-Dedc.fs.config=/run/secrets/provider_config_secret",
+      "-jar", "/provider-base.jar", "--log-level=DEBUG"
+    ]
