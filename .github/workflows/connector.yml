@@ -1,8 +1,8 @@
 name: Connector package
 
-# El .pyz no se versiona: se construye aqui. En cada push a connector/ se
-# comprueba que sigue construyendo y funcionando, y al publicar una release
-# con tag connector-v* se adjunta el binario junto a su SHA-256.
+# El .pyz no se versiona: se construye aqui. En cada push que toque el codigo
+# o el build se comprueba que sigue construyendo y funcionando, y al publicar
+# una release con tag connector-v* se adjunta el binario junto a su SHA-256.
 on:
   workflow_dispatch:
   push:
@@ -11,7 +11,8 @@ on:
       - main
     paths:
       - '.github/workflows/connector.yml'
-      - 'connector/**'
+      - 'build.sh'
+      - 'src/**'
   release:
     types: [published]
 
@@ -42,14 +43,14 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Build
-        run: connector/build.sh
+        run: ./build.sh
 
       - name: Verify checksum
-        run: cd connector/dist && sha256sum -c connector.pyz.sha256
+        run: cd dist && sha256sum -c connector.pyz.sha256
 
       - name: Smoke test
         env:
-          PYZ: ${{ github.workspace }}/connector/dist/connector.pyz
+          PYZ: ${{ github.workspace }}/dist/connector.pyz
         run: |
           set -eu
           "$PYZ" --help > /dev/null
@@ -74,8 +75,8 @@ jobs:
         with:
           name: connector-pyz
           path: |
-            connector/dist/connector.pyz
-            connector/dist/connector.pyz.sha256
+            dist/connector.pyz
+            dist/connector.pyz.sha256
           retention-days: 14
 
   publish:
@@ -99,7 +100,7 @@ jobs:
       - name: Build
         env:
           CONNECTOR_VERSION: ${{ github.event.release.tag_name }}
-        run: connector/build.sh
+        run: ./build.sh
 
       # El .pyz y su checksum se suben juntos y de la misma construccion: el
       # participante se descarga un ejecutable y lo corre, y lo unico que tiene
@@ -110,6 +111,6 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           gh release upload "$TAG" \
-            connector/dist/connector.pyz \
-            connector/dist/connector.pyz.sha256 \
+            dist/connector.pyz \
+            dist/connector.pyz.sha256 \
             --clobber --repo "$GITHUB_REPOSITORY"

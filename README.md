@@ -161,7 +161,7 @@ The checksum matters here: the participant is downloading an executable and runn
 ### Downloading it on the target server
 
 ```bash
-BASE=https://github.com/bitds/deploy-infrastructure/releases/download/connector-v1.0.0
+BASE=https://github.com/bitds/connector/releases/download/connector-v1.0.0
 
 curl -LO $BASE/connector.pyz
 curl -LO $BASE/connector.pyz.sha256
