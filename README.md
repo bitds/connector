@@ -2,7 +2,7 @@
 
 A command-line tool that lets an external participant deploy their own bitDS connector on their own server, without having to copy configuration files  by hand.
 
-It ships as a **zipapp**: a single 16 KB executable file. It does not bundle a Python interpreter, so the server needs Python 3.10 or newer, but it does not requires `pip`, or virtualenv an or root privileges.
+It ships as a **zipapp**, which is a single 16 KB executable file. It does not bundle a Python interpreter, so the server needs Python 3.10 or newer, but it does not requires `pip`, or virtualenv an or root privileges.
 
 
 **No third-party dependencies.** Everything is standard library. 
@@ -13,6 +13,14 @@ It ships as a **zipapp**: a single 16 KB executable file. It does not bundle a P
 - Python 3.10 or newer
 
 ## Quick start
+
+Download the latest release and verify it:
+
+```bash
+curl -LO https://github.com/bitds/connector/releases/latest/download/connector.pyz
+curl -LO https://github.com/bitds/connector/releases/latest/download/connector.pyz.sha256
+sha256sum -c connector.pyz.sha256
+```
 
 Install the tool once, so it can be called from anywhere:
 
@@ -27,7 +35,7 @@ Then create the deployment directory and work from inside it:
 mkdir ~/connector && cd ~/connector    # this directory IS the deployment
 ```
 
-This directory is the deployment: every file the connector needs is written here, and every later command must be run from inside it.
+This directory is the deployment every file the connector needs is written here, and every later command must be run from inside it.
 
 ```bash
 connector generate --participant-id inferia --host 203.0.113.10 \
@@ -58,7 +66,7 @@ Run `./connector.pyz <command> --help` for the full set of options.
 
 ## Stopping, restarting and logs
 
-The tool does not wrap Docker, and it does not need to because  the deployment is an ordinary Compose project so every `docker compose` command works from inside the deployment directory.
+The deployment is an ordinary Compose project so every `docker compose` command works from inside the deployment directory.
 
 
 ---------------- 
@@ -143,39 +151,6 @@ at once: `edc.hostname`, `edc.dsp.callback.address`,
 
 **PostgreSQL runs inside the same Compose project**, on a named volume. The connector reaches it as `db:5432` over the internal network, and its port is not published to the host.
 
-## Distribution
-
-Building produces two files:
-
-```bash
-./build.sh
-# dist/connector.pyz          16K
-# dist/connector.pyz.sha256
-```
-
-Publish both somewhere the participant can reach, then have them download it.
-The checksum matters here: the participant is downloading an executable and running it, so they need a way to confirm it is the file you published.
 
 
-
-### Downloading it on the target server
-
-```bash
-BASE=https://github.com/bitds/connector/releases/download/connector-v1.0.0
-
-curl -LO $BASE/connector.pyz
-curl -LO $BASE/connector.pyz.sha256
-sha256sum -c connector.pyz.sha256      # must print: connector.pyz: OK
-chmod +x connector.pyz
-```
-
-To make it available as a normal command instead of a file in one directory:
-
-```bash
-sudo install -m 755 connector.pyz /usr/local/bin/connector
-connector --help
-```
-
-Note that `up` and `info` act on the current working directory, so installing it
-system-wide is convenient but does not change where the deployment lives.
 
