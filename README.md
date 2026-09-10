@@ -43,7 +43,52 @@ connector generate --participant-id inferia --host 203.0.113.10 \
   --registry-url https://registry.bitds.eu/api/
 ```
 
+Common `generate` options:
+
+| Option | Description |
+|---|---|
+| `--participant-id PARTICIPANT_ID` | Short participant name, for example `inferia` or `acme`. |
+| `--host HOST` | Public IP address or domain name of this server. |
+| `--country COD` | Country as ISO alpha-3. Use `--list-countries` to see the accepted values. |
+| `--entity-type {public,private,ngo}` | Participant entity type. (public,private,ngo) |
+| `--registry-url REGISTRY_URL` | URL of the BITDS participant registry the connector talks to. |
+| `--location LOCATION` | Participant location claim. Defaults to `eu`. |
+| `--port-base PORT_BASE` | Port block base. Defaults to the one already deployed here, or to the first free block on the server. |
+| `--image IMAGE` | Connector image to deploy. Defaults to `ghcr.io/bitds/provider-base:latest`. |
+| `--force` | Regenerate without asking, useful for non-interactive use. |
+
 -------------------------
+
+```bash
+ connector info
+```
+
+```txt
+connector details
+  Status                running
+  Participant DID       did:web:bitds.eu:participant:paris:public:did
+  Hostname (URL)        http://152.89.166.16
+  Callback address DSP  http://152.89.166.16:18404/protocol
+
+Ports
+  HTTP port             18401
+  Management port       18403
+  Protocol port         18404
+  Public port           18501
+
+Credentials
+  API key               4d98a32b6df8412355a76b1e0a14217aefc25b7884c453ff238d30ee0d289f8a
+
+Claims
+  country               fra
+  location              eu
+  entity_type           private
+
+Public key
+  send this to BITDS to register the participant
+  MCowBQYDK2VwAyEAVxaUv5WjsjQldSda67EEp4RFhU+uEL6osYRYWRE80sI=
+
+```
 
 ## Commands
 
@@ -73,7 +118,7 @@ The deployment is an ordinary Compose project so every `docker compose` command 
 
 ### More details
 
-`generate` writes the connector configuration into the current directory, using the identity of the participant (`--participant-id`), the public address of the server (`--host`), the country and the entity type of the organisation, and the registry the connector will talk to. Run `connector generate --help` to see every accepted argument.
+`generate` writes the connector configuration into the current directory, using the identity of the participant (`--participant-id`), the public address of the server (`--host`), the country and the entity type of the organisation, and the registry the connector will talk to. 
 
 ```bash
 connector up
@@ -150,7 +195,5 @@ at once: `edc.hostname`, `edc.dsp.callback.address`,
 
 
 **PostgreSQL runs inside the same Compose project**, on a named volume. The connector reaches it as `db:5432` over the internal network, and its port is not published to the host.
-
-
 
 
