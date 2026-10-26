@@ -42,10 +42,11 @@ IMAGE = "ghcr.io/bitds/provider-base:latest"
 PROG = "connector"
 
 # Los puertos del conector se derivan de una base: 18000 -> 18001, 18003...
-# control (+5) y version (+6) no se publican, solo los usa el conector por dentro.
-OFFSETS = {"http": 1, "management": 3, "protocol": 4, "control": 5, "version": 6, "public": 101}
+# control (+5), version (+6) y signaling (+7) no se publican, solo los usa el conector por dentro.
+OFFSETS = {"http": 1, "management": 3, "protocol": 4, "control": 5, "version": 6,
+           "signaling": 7, "public": 101}
 
-# Solo estos se publican en el host; control y version viven dentro de la red de compose.
+# Solo estos se publican en el host; control, version y signaling viven dentro de la red de compose.
 PUBLICADOS = ("http", "management", "protocol", "public")
 
 # Namespace de los claims del EDC.
@@ -231,11 +232,12 @@ def run(args: argparse.Namespace) -> None:
         confirmar_sobrescritura(args.force)
     ports = derivar_puertos(elegir_base(args.port_base, base_previa))
 
-    # 1. El .properties: la plantilla base (53 lineas con valores de relleno)
+    # 1. El .properties: la plantilla base (con valores de relleno)
     #    y encima las claves concretas de este despliegue.
     props.write_text(BASE_PROPERTIES.read_text())
     set_properties(props, {
         "edc.participant.id": did,
+        "edc.participant.context.id": name,
         "edc.hostname": f"http://{args.host}",
         "web.http.port": ports["http"],
         "web.http.management.port": ports["management"],
@@ -244,8 +246,10 @@ def run(args: argparse.Namespace) -> None:
         "web.http.control.port": ports["control"],
         "web.http.version.port": ports["version"],
         "web.http.management.auth.key": api_key,
+        "web.http.signaling.port": ports["signaling"],
         "edc.dsp.callback.address": f"http://{args.host}:{ports['protocol']}/protocol",
         "edc.dataplane.api.public.baseurl": f"http://{args.host}:{ports['public']}/public",
+        "edc.dataplane.proxy.public.endpoint": f"http://{args.host}:{ports['public']}/public",
         # El conector se llama a si mismo: su propio host y el puerto http dinamico.
         "edc.participant.eidas.url": f"http://{args.host}:{ports['http']}/api/vp_token",
         # Postgres vive en el mismo compose: se resuelve por nombre de servicio.
