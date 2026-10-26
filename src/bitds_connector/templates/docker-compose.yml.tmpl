@@ -62,8 +62,4 @@ services:
       - provider_config_secret
     volumes:
       - ./:/identity
-    entrypoint: [
-      "java",
-      "-Dedc.fs.config=/run/secrets/provider_config_secret",
-      "-jar", "/provider-base.jar", "--log-level=DEBUG"
-    ]
+    entrypoint: ["/bin/sh", "-c", "[ -f /connector-base.jar ] && exec java -Dedc.fs.config=/run/secrets/provider_config_secret -jar /connector-base.jar --log-level=DEBUG; exec java -Dedc.fs.config=/run/secrets/provider_config_secret -jar /provider-base.jar --log-level=DEBUG"]
