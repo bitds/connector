@@ -26,7 +26,7 @@ src/__main__.py          arranque del zipapp
 src/bitds_connector/
     __init__.py          solo __version__ (build.sh sella aqui el tag)
     cli.py               parser unico: generate | up | info
-    generate.py          294 lineas, el nucleo
+    generate.py          ~315 lineas, el nucleo
     up.py                187 lineas, arranque y verificacion
     info.py              99 lineas, lectura de estado
     ui.py                56 lineas, colores ANSI a pelo
@@ -34,10 +34,14 @@ src/bitds_connector/
         provider-base-configuration.properties   base de 53 lineas
         docker-compose.yml.tmpl                  stack conector + postgres
         claims.default.json                      3 claims por defecto
+tests/test_generate.py   unittest de generate.py (no entra en el zipapp)
 ```
 
-~811 lineas de codigo en total. No hay tests automatizados; la verificacion
-esta en el smoke test del CI (ver mas abajo).
+Tests con `python3 -m unittest discover -s tests` (solo libreria estandar,
+sin pytest). Cubren las funciones puras de generate.py y un `generate`
+completo en un directorio temporal, con los puertos simulados. El CI los
+corre antes del build, y despues sigue el smoke test sobre el .pyz (ver mas
+abajo). up.py e info.py no tienen tests: dependen de Docker.
 
 ## Convenciones del proyecto (importante respetarlas)
 
@@ -150,8 +154,9 @@ sale del servidor.
 ## Build
 
 `./build.sh [version]`. Version por orden de preferencia: argumento >
-`$CONNECTOR_VERSION` > `git describe --tags --match 'connector-v*' --dirty` >
-`0.0.0+dev`. Se le quita el prefijo `connector-v`.
+`$CONNECTOR_VERSION` > `git describe --tags --match 'v[0-9]*' --dirty` >
+`0.0.0+dev`. Se le quita el prefijo `v`. Los tags son `vX.Y.Z` (antes eran
+`connector-v*`, de cuando esto vivia en el monorepo).
 
 Empaqueta una **copia** del `src/` en un tmpdir (no `src/` directo) para que
 sellar la version no ensucie el arbol de trabajo. Usa `python3 -m zipapp` con
@@ -179,9 +184,12 @@ Como funciona hoy:
   comprueba que salen los ficheros, que el `.properties` es 600 y que
   `docker compose config -q` valida. Sube el `.pyz` como **artifact del run**
   (solo py3.13, retencion 14 dias). Eso NO es una release.
-- **release published con tag `connector-v*`**: corre `build` y luego `publish`
-  (`needs: build`), que reconstruye con `CONNECTOR_VERSION` = el tag y adjunta
-  `.pyz` + `.sha256` a la release con `gh release upload --clobber`.
+- **release published con tag `vX.Y.Z`**: `build` valida el formato del tag
+  (si no lo cumple, falla), sella la version con `CONNECTOR_VERSION` = el tag y
+  el smoke test comprueba que `--version` la devuelve. Luego `publish`
+  (`needs: build`) **no reconstruye**: descarga el artifact que paso el smoke
+  test, verifica el SHA-256 y lo adjunta a la release con
+  `gh release upload --clobber`.
 - El trigger es `release: types: [published]`, **no** un push de tag: `git push
   --tags` por si solo no publica nada. Hay que crear la release de verdad.
 - Si el build falla en cualquiera de las dos versiones de Python, `publish` se

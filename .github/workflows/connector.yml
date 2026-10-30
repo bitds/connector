@@ -2,7 +2,7 @@ name: Connector package
 
 # El .pyz no se versiona: se construye aqui. En cada push que toque el codigo
 # o el build se comprueba que sigue construyendo y funcionando, y al publicar
-# una release con tag connector-v* se adjunta el binario junto a su SHA-256.
+# una release con tag vX.Y.Z se adjunta el binario junto a su SHA-256.
 on:
   workflow_dispatch:
   push:
@@ -13,6 +13,7 @@ on:
       - '.github/workflows/connector.yml'
       - 'build.sh'
       - 'src/**'
+      - 'tests/**'
   release:
     types: [published]
 
@@ -42,7 +43,27 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      # Un tag mal escrito (v.0.0.1, 1.2.0...) debe romper la release de forma
+      # visible, no publicarla sin binario o con una version absurda dentro.
+      - name: Check release tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || {
+            echo "::error::Release tag '$TAG' is not vX.Y.Z (e.g. v1.2.0 or v1.2.0-rc1)"
+            exit 1
+          }
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      # En una release, el tag se sella aqui y no en `publish`: el .pyz que se
+      # sube es este mismo, el que pasa el smoke test. Fuera de una release el
+      # tag va vacio y build.sh cae a su version de desarrollo.
       - name: Build
+        env:
+          CONNECTOR_VERSION: ${{ github.event.release.tag_name }}
         run: ./build.sh
 
       - name: Verify checksum
@@ -51,11 +72,17 @@ jobs:
       - name: Smoke test
         env:
           PYZ: ${{ github.workspace }}/dist/connector.pyz
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -eu
           "$PYZ" --help > /dev/null
-          "$PYZ" --version > /dev/null
           "$PYZ" generate --list-countries > /dev/null
+
+          # En una release, el binario tiene que decir de que release salio.
+          version="$("$PYZ" --version)"
+          if [ -n "$TAG" ]; then
+            test "$version" = "connector ${TAG#v}"
+          fi
 
           # Un despliegue de verdad en un directorio vacio: valida tambien las
           # plantillas, que es donde un cambio rompe sin que el import falle.
@@ -79,32 +106,29 @@ jobs:
             dist/connector.pyz.sha256
           retention-days: 14
 
+  # No construye nada: publica el artefacto que subio `build`, que es justo el
+  # que paso los tests. El formato del tag ya lo valida `build`: si no es
+  # vX.Y.Z, `build` falla y esto no llega a correr.
   publish:
     name: Attach to release
     needs: build
-    if: github.event_name == 'release' 
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Download tested artifact
+        uses: actions/download-artifact@v4
         with:
-          python-version: '3.13'
-
-      # El tag es lo que sella la version dentro del binario: el .pyz que se
-      # descarga el participante tiene que saber de que release salio.
-      - name: Build
-        env:
-          CONNECTOR_VERSION: ${{ github.event.release.tag_name }}
-        run: ./build.sh
+          name: connector-pyz
+          path: dist
 
       # El .pyz y su checksum se suben juntos y de la misma construccion: el
       # participante se descarga un ejecutable y lo corre, y lo unico que tiene
       # para comprobar que es el que publicamos es ese SHA-256.
+      - name: Verify checksum
+        run: cd dist && sha256sum -c connector.pyz.sha256
+
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

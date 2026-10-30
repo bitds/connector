@@ -18,6 +18,7 @@ Uso:
 
 import argparse
 import json
+import re
 import secrets
 import socket
 import sys
@@ -31,11 +32,10 @@ BASE_PROPERTIES = TEMPLATES / "provider-base-configuration.properties"
 COMPOSE_TEMPLATE = TEMPLATES / "docker-compose.yml.tmpl"
 DEFAULT_CLAIMS = TEMPLATES / "claims.default.json"
 
-# Repo de la imagen del conector. La tag la eliges tu: no hay una por defecto,
-# porque una default codificada a mano acaba quedandose vieja sin que nadie lo note.
-# Imagen del conector. Es una tag movil: cada despliegue coge la ultima
-# publicada, y el valor concreto queda congelado en el docker-compose.yml
-# que escribe `generate`.
+# Imagen del conector. Es una tag movil a proposito: una version fija codificada
+# aqui acabaria quedandose vieja sin que nadie lo note. Ojo: el compose guarda
+# `:latest`, no un digest, asi que cada `connector up` hace pull y puede traer
+# una version mas nueva. Quien necesite fijarla, que pase --image con su tag.
 IMAGE = "ghcr.io/bitds/provider-base:latest"
 
 # Como se invoca la herramienta, para los mensajes de ayuda.
@@ -64,6 +64,22 @@ EU_COUNTRIES = {
 }
 
 ENTITY_TYPES = ("public", "private", "ngo")
+
+# El participant-id acaba en el DID, en el nombre del proyecto de compose, en
+# container_name, en el usuario y la BD de postgres y dentro de un YAML generado
+# con str.format(). Este es el subconjunto que vale en todos esos sitios sin
+# escapar nada. El tope de 32 deja margen al limite de 63 de postgres para
+# "participant-{name}-db".
+PARTICIPANT_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
+
+
+def participant_id(valor: str) -> str:
+    """Tipo de argparse para --participant-id: falla en el parseo, no en Docker."""
+    if not PARTICIPANT_ID.fullmatch(valor):
+        raise argparse.ArgumentTypeError(
+            f"'{valor}' is not valid: use 1-32 lowercase letters, digits or hyphens, "
+            "not starting or ending with a hyphen (e.g. inferia, acme-labs).")
+    return valor
 
 
 class ListarPaises(argparse.Action):
@@ -188,7 +204,8 @@ def confirmar_sobrescritura(force: bool) -> None:
 
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--participant-id", required=True, help="Short name: inferia, acme...")
+    p.add_argument("--participant-id", required=True, type=participant_id,
+                   help="Short name: lowercase letters, digits and hyphens (inferia, acme-labs...).")
     p.add_argument("--host", required=True, help="Public IP or domain of THIS server.")
     p.add_argument("--image", default=IMAGE,
                    help=f"Connector image to deploy (default: {IMAGE}).")

@@ -19,9 +19,10 @@ cd "$(dirname "$0")"
 # lo guarda: sin esto, ni el ni nosotros sabemos que build esta corriendo.
 VERSION="${1:-${CONNECTOR_VERSION:-}}"
 if [ -z "$VERSION" ]; then
-    VERSION="$(git describe --tags --match 'connector-v*' --dirty 2>/dev/null || true)"
+    # 'v[0-9]*' y no 'v*': deja fuera tags mal formados como el antiguo v.0.0.1.
+    VERSION="$(git describe --tags --match 'v[0-9]*' --dirty 2>/dev/null || true)"
 fi
-VERSION="${VERSION#connector-v}"
+VERSION="${VERSION#v}"
 [ -n "$VERSION" ] || VERSION="0.0.0+dev"
 
 rm -rf dist && mkdir -p dist

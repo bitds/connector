@@ -47,7 +47,7 @@ Run `connector <command> --help` for all options.
 
 | Option | Description |
 |---|---|
-| `--participant-id` | Short participant name, e.g. `inferia` |
+| `--participant-id` | Short participant name, e.g. `inferia`: 1-32 lowercase letters, digits or hyphens |
 | `--host` | Public IP or domain of this server (loopback addresses are rejected) |
 | `--country` | ISO alpha-3 code; `--list-countries` shows the 27 EU values |
 | `--entity-type` | `public`, `private` or `ngo` |
