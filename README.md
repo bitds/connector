@@ -31,7 +31,7 @@ connector up
 
 `up` finishes by printing the **Ed25519 public key**: send it to BITDS to register the participant.
 
-> **The current directory is the deployment.** Every command reads and writes the directory it is run from; the tool takes no path argument. If you don't install it system-wide, call it by its path from inside the deployment directory (`~/downloads/connector.pyz generate ...`), never from the directory holding the `.pyz`.
+> **The current directory is the deployment.** Every command reads and writes the directory it is run from the tool takes no path argument. If you don't install it system-wide, call it by its path from inside the deployment directory (`~/downloads/connector.pyz generate ...`), never from the directory holding the `.pyz`.
 
 ## Commands
 
@@ -49,7 +49,7 @@ Run `connector <command> --help` for all options.
 |---|---|
 | `--participant-id` | Short participant name, e.g. `inferia`: 1-32 lowercase letters, digits or hyphens |
 | `--host` | Public IP or domain of this server (loopback addresses are rejected) |
-| `--country` | ISO alpha-3 code; `--list-countries` shows the 27 EU values |
+| `--country` | ISO alpha-3 code: `--list-countries` shows the 27 EU values |
 | `--entity-type` | `public`, `private` or `ngo` |
 | `--registry-url` | BITDS participant registry URL (ask the dataspace authority) |
 | `--location` | Location claim. Default: `eu` |
@@ -100,9 +100,9 @@ The deployment is a regular Compose project, so any `docker compose` command wor
 provider_config_secret.properties   connector configuration (mode 600)   ← generate
 claims.json                         participant claims                   ← generate
 docker-compose.yml                  connector + PostgreSQL               ← generate
-vptoken.txt                         empty; filled in by the connector    ← generate
+vptoken.txt                         empty filled in by the connector    ← generate
 ed25519_private.pem                 private key (mode 600, root)         ← up
 ed25519_public.pem                  public key                           ← up
 ```
 
-The private key never leaves the server; only the public key is sent to BITDS.
+The private key never leaves the server, only the public key is sent to BITDS.
