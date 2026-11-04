@@ -17,7 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_arguments(gen)
     gen.set_defaults(func=generate.run)
 
-    arriba = subs.add_parser("up", help="Start the connector and wait until it is really running.")
+    arriba = subs.add_parser("up", help="Start the stack, register the participant in its IdentityHub "
+                                            "and wait until the connector is really running.")
     up.add_arguments(arriba)
     arriba.set_defaults(func=up.run)
 

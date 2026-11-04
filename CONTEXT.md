@@ -1,5 +1,46 @@
 # Contexto: herramienta `connector` (bitDS)
 
+> **Rama `dcp`**: el conector usa DCP en vez del registry + claims de bitDS.
+> Lo que sigue en este documento describe la version anterior; donde choque,
+> manda esta seccion.
+>
+> - Modulos: `generate.py` (escribe la config), `up.py` (la secuencia de
+>   arranque), `identityhub.py` (alta del participante en el IH), `stack.py`
+>   (Docker Compose: arrancar, vigilar, logs), `propiedades.py` (leer y
+>   actualizar `.properties`), `info.py` (resumen), `ui.py` y `cli.py`.
+> - Un directorio = un participante con su propio stack: `db` (postgres con
+>   dos BDs: la del conector y `identityhub`, creada por `db-init.sql`),
+>   `vault` + `vault-init`, `identityhub`, `key-init` y `provider`.
+> - Imagenes fijadas a `dcp-ffdfe0c` (commit de `base-bit-ds`, rama
+>   `identity-hub`) para conector e IdentityHub: tienen que ir a la par.
+> - `generate` ya no pide `--registry-url`, `--country`, `--entity-type` ni
+>   `--location`, y no escribe `claims.json` ni `vptoken.txt`.
+> - DID: `did:web:<host>%3A<ih_did>:<name>`. El puerto va dentro del DID, por
+>   eso se reusa la base de puertos al regenerar.
+> - Puertos del IH en el mismo bloque: +11 health, +12 identity (solo
+>   127.0.0.1), +13 credentials, +14 did, +15 sts (interno).
+> - `up` levanta primero `identityhub`, da de alta al participante por la
+>   Identity API (super-user) y guarda el `clientSecret` del STS en
+>   `bitds.sts.client.secret`; el conector lo mete en su vault en memoria
+>   (`StsSecretSeedExtension`). El IH solo devuelve ese secret en el alta.
+> - Al regenerar se conservan password de BD, token del vault, clave del
+>   super-user y secret STS (estan atados a estado persistente). Solo cambia
+>   la API key de management. Ya no hace falta `down -v`.
+> - Gotcha: compose NO recrea un contenedor si solo cambia el contenido de un
+>   fichero secret. `up` compara `StartedAt` con el mtime del `.properties` y
+>   recrea con `--force-recreate --no-deps` si hace falta.
+> - Gotcha: Jetty contesta 404/405 a todo antes de que Jersey registre las
+>   rutas. `up` espera a que `GET /participants` de 200 antes de fiarse de un
+>   404 del participante.
+> - `vault-init` lee el token del IH del propio secret del IH (una sola fuente),
+>   y corre con el uid/gid del host para que `vault/keys/init.txt` sea suyo.
+> - El conector solo monta `keys/` (claves EDR), no el directorio entero: ahi
+>   estan tambien la clave de desellado y el root token del vault.
+> - Pendiente: credenciales (MembershipCredential del issuer y
+>   `edc.iam.trustedissuer.*`). Sin ellas el conector arranca y DCP funciona
+>   hasta el final, pero las peticiones DSP se rechazan con 401
+>   ("Number of requested credentials does not match").
+
 Vengo de la sesion en `~/Documents/DSP_Identity_SPACE/deploy-infrastructure`,
 donde esto vivia en el subdirectorio `connector/`. Ahora esta en su propia
 carpeta. Esto es todo lo que hay que saber.

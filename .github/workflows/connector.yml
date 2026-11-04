@@ -76,7 +76,7 @@ jobs:
         run: |
           set -eu
           "$PYZ" --help > /dev/null
-          "$PYZ" generate --list-countries > /dev/null
+          "$PYZ" generate --help > /dev/null
 
           # En una release, el binario tiene que decir de que release salio.
           version="$("$PYZ" --version)"
@@ -88,11 +88,12 @@ jobs:
           # plantillas, que es donde un cambio rompe sin que el import falle.
           cd "$(mktemp -d)"
           "$PYZ" generate --participant-id ci-smoke --host 203.0.113.10 \
-                          --country esp --entity-type public \
-                          --registry-url https://registry.example.org/api/ --force
+                          --issuer-did did:web:issuer.example.org%3A7183:issuer --force
           test -f docker-compose.yml
-          test -f claims.json
+          test -f db-init.sql
+          test -f vault/vault-init.sh
           test "$(stat -c '%a' provider_config_secret.properties)" = 600
+          test "$(stat -c '%a' identityhub_config_secret.properties)" = 600
           docker compose config -q
           "$PYZ" info > /dev/null
 

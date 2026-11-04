@@ -1,8 +1,18 @@
 # connector
 
-Command-line tool to deploy your own bitDS connector on your own server, without copying configuration files by hand.
+Command-line tool to deploy your own bitDS participant on your own server, without copying configuration files by hand.
 
-It ships as a single 16 KB **zipapp** with no third-party dependencies. No `pip`, virtualenv or root needed to run it.
+The participant uses **DCP** (Decentralized Claims Protocol): its identity is a `did:web` DID published by its own IdentityHub, and other connectors check its verifiable credentials before they share data with it. One deployment runs the whole stack:
+
+| Service | What it is |
+|---|---|
+| `provider` | the EDC connector |
+| `identityhub` | DID document, Credential Service and STS of the participant |
+| `vault` + `vault-init` | HashiCorp Vault holding the IdentityHub keys and secrets, unsealed on every start |
+| `db` | PostgreSQL for the connector and the IdentityHub |
+| `key-init` | creates the Ed25519 key pair the connector signs its EDR tokens with |
+
+The tool ships as a single **zipapp** with no third-party dependencies. No `pip`, virtualenv or root needed to run it.
 
 ## Requirements
 
@@ -24,22 +34,21 @@ sudo install -m 755 connector.pyz /usr/local/bin/connector
 # Create the deployment directory and deploy
 mkdir ~/connector && cd ~/connector
 connector generate --participant-id inferia --host 203.0.113.10 \
-  --country esp --entity-type public \
-  --registry-url https://registry.bitds.eu/api/
+  --issuer-did did:web:issuer.example.org%3A7183:issuer
 connector up
 ```
 
-`up` finishes by printing the **Ed25519 public key**: send it to BITDS to register the participant.
+`up` starts vault and the IdentityHub, **registers the participant in its IdentityHub**, and only then starts the connector, because the connector needs the STS client secret the IdentityHub returns at registration. It finishes by printing the participant **DID**.
 
-> **The current directory is the deployment.** Every command reads and writes the directory it is run from the tool takes no path argument. If you don't install it system-wide, call it by its path from inside the deployment directory (`~/downloads/connector.pyz generate ...`), never from the directory holding the `.pyz`.
+> **The current directory is the deployment.** Every command reads and writes the directory it is run from: the tool takes no path argument. If you don't install it system-wide, call it by its path from inside the deployment directory (`~/downloads/connector.pyz generate ...`), never from the directory holding the `.pyz`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `generate` | Writes the configuration files into the current directory |
-| `up` | Pulls the images, starts the stack and waits until the connector is actually running |
-| `info` | Prints identity, ports, API key, claims and public key |
+| `up` | Pulls the images, starts the stack, registers the participant and waits until the connector is actually running |
+| `info` | Prints DID, ports, keys and the state of the connector and the IdentityHub |
 
 Run `connector <command> --help` for all options.
 
@@ -49,60 +58,79 @@ Run `connector <command> --help` for all options.
 |---|---|
 | `--participant-id` | Short participant name, e.g. `inferia`: 1-32 lowercase letters, digits or hyphens |
 | `--host` | Public IP or domain of this server (loopback addresses are rejected) |
-| `--country` | ISO alpha-3 code: `--list-countries` shows the 27 EU values |
-| `--entity-type` | `public`, `private` or `ngo` |
-| `--registry-url` | BITDS participant registry URL (ask the dataspace authority) |
-| `--location` | Location claim. Default: `eu` |
+| `--issuer-did` | DID of the trusted issuer of `MembershipCredential` (ask the dataspace authority) |
 | `--port-base` | Port block base. Default: the one already deployed here, or the first free block |
-| `--image` | Connector image. Default: `ghcr.io/bitds/provider-base:latest` (public) |
+| `--image` | Connector image. Default: `ghcr.io/bitds/provider-base:dcp-ffdfe0c` |
+| `--ih-image` | IdentityHub image. Default: `ghcr.io/bitds/identity-hub:dcp-ffdfe0c` |
 | `--force` | Regenerate without asking |
 
-Ports are picked automatically: for base 18000 the block is `18001/18003/18004/18101`; if any is taken, the next base (+200) is tried. With an explicit `--port-base`, a busy port is an error.
+The DID is `did:web:<host>%3A<did port>:<participant-id>`, and its document is served at `http://<host>:<did port>/<participant-id>/did.json`.
+
+### Ports
+
+All ports come from one block: for base 18000 they are
+
+| Port | Use | Published |
+|---|---|---|
+| 18001 | connector HTTP | yes |
+| 18003 | connector Management API | yes |
+| 18004 | connector DSP protocol | yes |
+| 18101 | connector data plane (public) | yes |
+| 18013 | IdentityHub Credential Service | yes |
+| 18014 | IdentityHub DID document | yes |
+| 18012 | IdentityHub Identity API (administration) | only on `127.0.0.1` |
+
+If any of them is taken, the next base (+200) is tried. With an explicit `--port-base`, a busy port is an error. Vault, PostgreSQL and the IdentityHub STS are not published: they are only reachable inside the Compose network.
+
+The DID port is part of the DID, so changing `--host` or `--port-base` changes the identity of the participant.
 
 ### `info` example
 
 ```txt
-connector details
-  Status                running
-  Participant DID       did:web:bitds.eu:participant:paris:public:did
-  Hostname (URL)        http://152.89.166.16
-  Callback address DSP  http://152.89.166.16:18404/protocol
+Participant
+  Connector             running
+  IdentityHub           running
+  DID                   did:web:203.0.113.10%3A18014:inferia
+  DID document          http://203.0.113.10:18014/inferia/did.json
+  DSP callback          http://203.0.113.10:18004/protocol
+  Trusted issuer        did:web:issuer.example.org%3A7183:issuer
+  STS registered        yes
 
 Ports
-  HTTP port             18401
-  Management port       18403
-  Protocol port         18404
-  Public port           18501
+  HTTP port             18001
+  Management port       18003
+  Protocol port         18004
+  Public port           18101
+  IH credentials port   18013
+  IH DID port           18014
+  IH identity port      18012 (127.0.0.1 only)
 
 Credentials
-  API key               4d98a32b...
-
-Claims
-  country               fra
-  location              eu
-  entity_type           private
-
-Public key
-  send this to BITDS to register the participant
-  MCowBQYDK2VwAyEAVxaUv5WjsjQldSda67EEp4RFhU+uEL6osYRYWRE80sI=
+  Management API key    e38feddb...
+  IH super-user key     c3VwZXItdXNlcg==.30zp...
+  Credential service    http://203.0.113.10:18013/api/credentials
 ```
 
 ## Stopping, restarting and logs
 
-The deployment is a regular Compose project, so any `docker compose` command works from the deployment directory. PostgreSQL runs in the same project on a named volume (reachable as `db:5432`, not published to the host).
+The deployment is a regular Compose project, so any `docker compose` command works from the deployment directory.
 
-- `docker compose down` keeps the volume, configuration and keys. Bring it back with `connector up` (not `docker compose up -d`) to get the readiness wait and diagnostics.
-- `docker compose down -v` **also deletes the database**: assets, contract definitions, policies and negotiations. Only needed when regenerating an already-run directory, since `generate` issues a new DB password.
+- `docker compose down` keeps the volumes, configuration and keys. Bring it back with `connector up` (not `docker compose up -d`) to get the readiness wait and diagnostics.
+- `docker compose down -v` **also deletes the database and the vault**: assets, contract definitions, policies, negotiations, and the participant in the IdentityHub with its keys and credentials. The next `connector up` registers the participant again, with new keys.
+- Running `generate` again in a used directory issues a new management API key and keeps every other secret (database password, vault token, IdentityHub super-user key, STS client secret), so the existing data keeps working. `up` recreates the containers whose configuration changed.
 
 ## Files in the deployment directory
 
 ```
-provider_config_secret.properties   connector configuration (mode 600)   ← generate
-claims.json                         participant claims                   ← generate
-docker-compose.yml                  connector + PostgreSQL               ← generate
-vptoken.txt                         empty filled in by the connector    ← generate
-ed25519_private.pem                 private key (mode 600, root)         ← up
-ed25519_public.pem                  public key                           ← up
+provider_config_secret.properties     connector configuration (mode 600)      ← generate (+ STS secret by up)
+identityhub_config_secret.properties  IdentityHub configuration (mode 600)    ← generate
+docker-compose.yml                    the stack                               ← generate
+db-init.sql                           creates the IdentityHub database        ← generate
+vault/config/vault.hcl                vault configuration                     ← generate
+vault/vault-init.sh                   initializes and unseals vault           ← generate
+vault/keys/init.txt                   vault unseal key and root token (600)   ← up
+keys/ed25519_private.pem              EDR token private key (600, root)       ← up
+keys/ed25519_public.pem               EDR token public key                    ← up
 ```
 
-The private key never leaves the server, only the public key is sent to BITDS.
+**Back up `vault/keys/init.txt`.** Vault starts sealed every time and this file is the only way to unseal it: without it, the keys of the participant in the IdentityHub are lost. The connector container only mounts `keys/`, never the vault keys.

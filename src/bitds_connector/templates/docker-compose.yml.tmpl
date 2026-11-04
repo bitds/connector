@@ -1,4 +1,4 @@
-# Plantilla del stack del conector. La rellena generate.py con str.format(): los
+# Plantilla del stack del participante. La rellena generate.py con str.format(): los
 # marcadores entre llaves se sustituyen, y por eso el fichero no puede contener
 # ninguna otra llave literal. Los marcadores van entrecomillados para que la
 # plantilla siga siendo YAML valido tal cual.
@@ -7,9 +7,12 @@ name: "{name}"
 secrets:
   provider_config_secret:
     file: ./provider_config_secret.properties
+  identityhub_config_secret:
+    file: ./identityhub_config_secret.properties
 
 volumes:
   db-data:
+  vault-data:
 
 services:
   db:
@@ -21,16 +24,67 @@ services:
       POSTGRES_PASSWORD: "{db_password}"
     volumes:
       - db-data:/var/lib/postgresql/data
+      # Crea la BD del IdentityHub; solo se ejecuta con el volumen vacio.
+      - ./db-init.sql:/docker-entrypoint-initdb.d/identityhub.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U {db_user} -d {db_name}"]
       interval: 5s
       retries: 10
 
+  vault:
+    image: "{vault_image}"
+    restart: unless-stopped
+    cap_add: [IPC_LOCK]
+    command: server
+    volumes:
+      - vault-data:/vault/file
+      - ./vault/config:/vault/config:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8200/v1/sys/health?sealedcode=200&uninitcode=200"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  vault-init:
+    image: "{vault_image}"
+    restart: "no"
+    depends_on:
+      vault:
+        condition: service_healthy
+    # El usuario del host, para que vault/keys/init.txt sea suyo y no de root.
+    user: "{uid}:{gid}"
+    environment:
+      VAULT_ADDR: http://vault:8200
+    entrypoint: ["/bin/sh", "/vault-init.sh"]
+    secrets:
+      - identityhub_config_secret
+    volumes:
+      - ./vault/vault-init.sh:/vault-init.sh:ro
+      - ./vault/keys:/vault/keys
+
+  identityhub:
+    image: "{ih_image}"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
+    ports:
+      # Publicos: otros conectores resuelven aqui el DID y piden presentaciones.
+      - "{ih_credentials}:{ih_credentials}"
+      - "{ih_did}:{ih_did}"
+      # Identity API (administracion): solo desde este servidor.
+      - "127.0.0.1:{ih_identity}:{ih_identity}"
+    secrets:
+      - identityhub_config_secret
+    entrypoint: ["java", "-Dedc.fs.config=/run/secrets/identityhub_config_secret", "-jar", "/identity-hub.jar"]
+
   key-init:
     image: alpine/openssl:latest
     restart: "no"
     volumes:
-      - ./:/identity
+      - ./keys:/identity
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -53,6 +107,8 @@ services:
         condition: service_completed_successfully
       db:
         condition: service_healthy
+      identityhub:
+        condition: service_started
     ports:
       - "{http}:{http}"
       - "{management}:{management}"
@@ -60,6 +116,7 @@ services:
       - "{public}:{public}"
     secrets:
       - provider_config_secret
+    # Solo las claves EDR: el resto del directorio (claves del vault) no le hace falta.
     volumes:
-      - ./:/identity
+      - ./keys:/identity:ro
     entrypoint: ["/bin/sh", "-c", "[ -f /connector-base.jar ] && exec java -Dedc.fs.config=/run/secrets/provider_config_secret -jar /connector-base.jar --log-level=DEBUG; exec java -Dedc.fs.config=/run/secrets/provider_config_secret -jar /provider-base.jar --log-level=DEBUG"]

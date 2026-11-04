@@ -1,80 +1,70 @@
-#!/usr/bin/env python3
-"""Paso 1: genera el fichero de configuracion del conector en el directorio actual.
+"""Paso 1: escribe la configuracion del participante en el directorio actual.
 
-Escribe cuatro ficheros y no hace nada con Docker:
-
-    provider_config_secret.properties   la configuracion del conector
-    claims.json                         los claims del participante
-    docker-compose.yml                  el stack (conector + postgres)
-    vptoken.txt                         vacio; lo rellena el conector
-
-Las claves Ed25519 no se generan aqui: las crea el contenedor `key-init` al
-levantar el stack en el paso 2. El .properties solo referencia sus rutas, no su
-contenido, asi que puede escribirse antes de que existan.
-
-Uso:
-    python3 generate.py --participant-id inferia --host 203.0.113.10
+No toca Docker. El alta en el IdentityHub la hace `up`, porque necesita el
+IdentityHub arrancado.
 """
 
 import argparse
-import json
+import base64
+import os
 import re
 import secrets
 import socket
 import sys
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
-from bitds_connector import info, ui
+from bitds_connector import info, propiedades, ui
 
-TEMPLATES = files("bitds_connector") / "templates"
-BASE_PROPERTIES = TEMPLATES / "provider-base-configuration.properties"
-COMPOSE_TEMPLATE = TEMPLATES / "docker-compose.yml.tmpl"
-DEFAULT_CLAIMS = TEMPLATES / "claims.default.json"
+PLANTILLAS = files("bitds_connector") / "templates"
 
-# Imagen del conector. Es una tag movil a proposito: una version fija codificada
-# aqui acabaria quedandose vieja sin que nadie lo note. Ojo: el compose guarda
-# `:latest`, no un digest, asi que cada `connector up` hace pull y puede traer
-# una version mas nueva. Quien necesite fijarla, que pase --image con su tag.
-IMAGE = "ghcr.io/bitds/provider-base:latest"
+# Fijadas al mismo commit de base-bit-ds: conector e IdentityHub tienen que ir a la par.
+IMAGE = "ghcr.io/bitds/provider-base:dcp-ffdfe0c"
+IH_IMAGE = "ghcr.io/bitds/identity-hub:dcp-ffdfe0c"
+VAULT_IMAGE = "hashicorp/vault:latest"
 
-# Como se invoca la herramienta, para los mensajes de ayuda.
 PROG = "connector"
+SUPER_USER = "super-user"
+IH_DB = "identityhub"
 
-# Los puertos del conector se derivan de una base: 18000 -> 18001, 18003...
-# control (+5), version (+6) y signaling (+7) no se publican, solo los usa el conector por dentro.
 OFFSETS = {"http": 1, "management": 3, "protocol": 4, "control": 5, "version": 6,
-           "signaling": 7, "public": 101}
+           "signaling": 7, "ih_http": 11, "ih_identity": 12, "ih_credentials": 13,
+           "ih_did": 14, "ih_sts": 15, "public": 101}
 
-# Solo estos se publican en el host; control, version y signaling viven dentro de la red de compose.
-PUBLICADOS = ("http", "management", "protocol", "public")
+# Los que se abren en el host (ih_identity solo en 127.0.0.1). Todos deben estar libres.
+PUBLICADOS = ("http", "management", "protocol", "public",
+              "ih_credentials", "ih_did", "ih_identity")
 
-# Namespace de los claims del EDC.
-NS = "https://w3id.org/edc/v0.0.1/ns/"
-
-# Los 27 de la UE en ISO 3166-1 alfa-3, en minusculas (que es como los espera el conector).
-EU_COUNTRIES = {
-    "aut": "Austria", "bel": "Belgium", "bgr": "Bulgaria", "cyp": "Cyprus",
-    "cze": "Czechia", "deu": "Germany", "dnk": "Denmark", "esp": "Spain",
-    "est": "Estonia", "fin": "Finland", "fra": "France", "grc": "Greece",
-    "hrv": "Croatia", "hun": "Hungary", "irl": "Ireland", "ita": "Italy",
-    "ltu": "Lithuania", "lux": "Luxembourg", "lva": "Latvia", "mlt": "Malta",
-    "nld": "Netherlands", "pol": "Poland", "prt": "Portugal", "rou": "Romania",
-    "svk": "Slovakia", "svn": "Slovenia", "swe": "Sweden",
-}
-
-ENTITY_TYPES = ("public", "private", "ngo")
-
-# El participant-id acaba en el DID, en el nombre del proyecto de compose, en
-# container_name, en el usuario y la BD de postgres y dentro de un YAML generado
-# con str.format(). Este es el subconjunto que vale en todos esos sitios sin
-# escapar nada. El tope de 32 deja margen al limite de 63 de postgres para
-# "participant-{name}-db".
+# Valido a la vez en el DID, en compose, en postgres y en el YAML generado, sin escapar nada.
 PARTICIPANT_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?")
 
 
+@dataclass
+class Participante:
+    nombre: str
+    host: str
+    issuer_did: str
+    puertos: dict
+    secretos: dict
+
+    @property
+    def did(self) -> str:
+        return did_de(self.host, self.puertos["ih_did"], self.nombre)
+
+    @property
+    def db_user(self) -> str:
+        return f"participant-{self.nombre}"
+
+    @property
+    def db_name(self) -> str:
+        return f"participant-{self.nombre}-db"
+
+    def url(self, puerto: str, ruta: str) -> str:
+        return f"http://{self.host}:{self.puertos[puerto]}/{ruta}"
+
+
 def participant_id(valor: str) -> str:
-    """Tipo de argparse para --participant-id: falla en el parseo, no en Docker."""
     if not PARTICIPANT_ID.fullmatch(valor):
         raise argparse.ArgumentTypeError(
             f"'{valor}' is not valid: use 1-32 lowercase letters, digits or hyphens, "
@@ -82,38 +72,44 @@ def participant_id(valor: str) -> str:
     return valor
 
 
-class ListarPaises(argparse.Action):
-    """--list-countries: imprime la tabla y sale, sin exigir el resto de argumentos."""
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        codigos = sorted(EU_COUNTRIES)
-        filas = -(-len(codigos) // 3)  # 3 columnas
-        for i in range(filas):
-            columna = (f"{c}  {EU_COUNTRIES[c]:<14}" for c in codigos[i::filas])
-            print("  " + "".join(columna).rstrip())
-        parser.exit()
+def did_valido(valor: str) -> str:
+    if not valor.startswith("did:") or any(c.isspace() for c in valor):
+        raise argparse.ArgumentTypeError(
+            f"'{valor}' is not a DID (e.g. did:web:issuer.example.org%3A7183:issuer).")
+    return valor
 
 
-def set_properties(path: Path, overrides: dict) -> None:
-    """Sustituye las claves indicadas en el .properties; las que no existan, las anade.
-    El resto del fichero (comentarios y claves fijas) se conserva tal cual."""
-    lines = path.read_text().splitlines()
-    for key, value in overrides.items():
-        for i, line in enumerate(lines):
-            if line.startswith(f"{key}="):
-                lines[i] = f"{key}={value}"
-                break
-        else:
-            lines.append(f"{key}={value}")
-    path.write_text("\n".join(lines) + "\n")
+def did_de(host: str, puerto_did: int, nombre: str) -> str:
+    """did:web:h%3A18014:x se resuelve en http://h:18014/x/did.json, que es lo que publica el IdentityHub."""
+    return f"did:web:{host}%3A{puerto_did}:{nombre}"
 
+
+def clave_super_user() -> str:
+    """Formato del IdentityHub: base64(id) + "." + secreto."""
+    usuario = base64.b64encode(SUPER_USER.encode()).decode()
+    secreto = base64.b64encode(secrets.token_bytes(32)).decode()
+    return f"{usuario}.{secreto}"
+
+
+def generar_secretos(previos: dict, ih_previos: dict) -> dict:
+    """Solo cambia la API key. El resto esta atado a lo que ya hay guardado (volumen
+    de postgres, vault, alta en el IdentityHub) y uno nuevo dejaria el stack roto."""
+    return {
+        "api_key": secrets.token_hex(32),
+        "db_password": previos.get("edc.datasource.default.password") or secrets.token_hex(16),
+        "sts_secret": previos.get("bitds.sts.client.secret", ""),
+        "super_user_key": ih_previos.get("edc.ih.api.superuser.key") or clave_super_user(),
+        "vault_token": ih_previos.get("edc.vault.hashicorp.token") or secrets.token_hex(24),
+    }
+
+
+# --- Puertos ---
 
 def derivar_puertos(base: int) -> dict:
-    return {nombre: base + off for nombre, off in OFFSETS.items()}
+    return {nombre: base + offset for nombre, offset in OFFSETS.items()}
 
 
 def puerto_libre(puerto: int) -> bool:
-    """True si nadie esta escuchando en ese puerto."""
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -123,42 +119,33 @@ def puerto_libre(puerto: int) -> bool:
             return False
 
 
-def comprobar_puertos(ports: dict) -> None:
-    """Aborta si algun puerto publicado esta ocupado, proponiendo una base libre.
-
-    Sin esto el fallo no aparece hasta el `docker compose up`, como un error de
-    Docker que no dice cual es el puerto en conflicto.
-    """
-    ocupados = [(n, ports[n]) for n in PUBLICADOS if not puerto_libre(ports[n])]
-    if not ocupados:
-        return
-    detalle = ", ".join(f"{n} ({puerto})" for n, puerto in ocupados)
-    alternativa = primera_base_libre()
-    sugerencia = (f"Drop --port-base to pick one automatically, or use --port-base {alternativa}."
-                  if alternativa else "No free port block left between 18000 and 19999.")
-    ui.fail(f"port base {ports['http'] - OFFSETS['http']} is not usable: "
-            f"{detalle} already in use.\n{sugerencia}")
-
-
 def primera_base_libre(desde: int = 18000, hasta: int = 19999, paso: int = 200) -> int | None:
-    """Primera base cuyo bloque publicado esta entero libre."""
     for base in range(desde, hasta, paso):
         if all(puerto_libre(base + OFFSETS[n]) for n in PUBLICADOS):
             return base
     return None
 
 
-def elegir_base(pedida: int | None, previa: int | None) -> int:
-    """Decide la base del bloque de puertos.
+def comprobar_puertos(puertos: dict) -> None:
+    """Falla aqui, diciendo cual, en vez de en el `docker compose up`."""
+    ocupados = [(n, puertos[n]) for n in PUBLICADOS if not puerto_libre(puertos[n])]
+    if not ocupados:
+        return
+    detalle = ", ".join(f"{n} ({p})" for n, p in ocupados)
+    alternativa = primera_base_libre()
+    sugerencia = (f"Drop --port-base to pick one automatically, or use --port-base {alternativa}."
+                  if alternativa else "No free port block left between 18000 and 19999.")
+    ui.fail(f"port base {puertos['http'] - OFFSETS['http']} is not usable: "
+            f"{detalle} already in use.\n{sugerencia}")
 
-    1. Si se pide una a mano, se respeta y se valida (nadie mas debe tenerla).
-    2. Si no, se reusa la del despliegue que ya hay aqui: regenerar la config
-       no debe cambiarle los puertos a un conector que ya esta registrado.
-    3. Si tampoco la hay, se coge la primera libre del servidor.
+
+def elegir_base(pedida: int | None, previa: int | None) -> int:
+    """La pedida a mano, si no la del despliegue de aqui, y si no la primera libre.
+
+    Reusar la previa importa: el puerto del DID va dentro del propio DID.
     """
     if pedida is not None:
-        # Si coincide con la del propio despliegue, los puertos "ocupados" son suyos.
-        if pedida != previa:
+        if pedida != previa:  # si es la previa, los puertos "ocupados" son los suyos
             comprobar_puertos(derivar_puertos(pedida))
         return pedida
     if previa is not None:
@@ -170,27 +157,90 @@ def elegir_base(pedida: int | None, previa: int | None) -> int:
 
 
 def base_configurada(props: Path) -> int | None:
-    """port_base del despliegue que ya hay aqui, deducida de web.http.port."""
-    for linea in props.read_text().splitlines():
-        if linea.startswith("web.http.port="):
-            try:
-                return int(linea.split("=", 1)[1]) - OFFSETS["http"]
-            except ValueError:
-                return None
-    return None
+    puerto = propiedades.leer(props).get("web.http.port", "")
+    return int(puerto) - OFFSETS["http"] if puerto.isdigit() else None
 
+
+# --- Ficheros ---
+
+def _desde_plantilla(destino: Path, plantilla: str, cambios: dict) -> None:
+    destino.write_text((PLANTILLAS / plantilla).read_text())
+    destino.chmod(0o600)
+    propiedades.actualizar(destino, cambios)
+
+
+def escribir_conector(p: Participante, destino: Path) -> None:
+    _desde_plantilla(destino, "provider-base-configuration.properties", {
+        "edc.participant.id": p.did,
+        "edc.participant.context.id": p.nombre,
+        "edc.hostname": p.host,
+        "web.http.port": p.puertos["http"],
+        "web.http.management.port": p.puertos["management"],
+        "web.http.protocol.port": p.puertos["protocol"],
+        "web.http.public.port": p.puertos["public"],
+        "web.http.control.port": p.puertos["control"],
+        "web.http.version.port": p.puertos["version"],
+        "web.http.signaling.port": p.puertos["signaling"],
+        "web.http.management.auth.key": p.secretos["api_key"],
+        "edc.dsp.callback.address": p.url("protocol", "protocol"),
+        "edc.dataplane.api.public.baseurl": p.url("public", "public"),
+        "edc.dataplane.proxy.public.endpoint": p.url("public", "public"),
+        "edc.datasource.default.user": p.db_user,
+        "edc.datasource.default.password": p.secretos["db_password"],
+        "edc.datasource.default.url": f"jdbc:postgresql://db:5432/{p.db_name}",
+        "edc.iam.sts.oauth.token.url": f"http://identityhub:{p.puertos['ih_sts']}/api/sts/token",
+        "edc.iam.sts.oauth.client.id": p.did,
+        "edc.iam.sts.oauth.client.secret.alias": f"{p.nombre}-sts-client-secret",
+        "bitds.sts.client.secret": p.secretos["sts_secret"],
+        "edc.iam.trustedissuer.issuerservice.id": p.issuer_did,
+    })
+
+
+def escribir_identityhub(p: Participante, destino: Path) -> None:
+    _desde_plantilla(destino, "identity-hub-configuration.properties", {
+        "web.http.port": p.puertos["ih_http"],
+        "web.http.identity.port": p.puertos["ih_identity"],
+        "web.http.credentials.port": p.puertos["ih_credentials"],
+        "web.http.did.port": p.puertos["ih_did"],
+        "web.http.sts.port": p.puertos["ih_sts"],
+        "edc.ih.api.superuser.key": p.secretos["super_user_key"],
+        "edc.datasource.default.user": p.db_user,
+        "edc.datasource.default.password": p.secretos["db_password"],
+        "edc.datasource.default.url": f"jdbc:postgresql://db:5432/{IH_DB}",
+        "edc.vault.hashicorp.token": p.secretos["vault_token"],
+    })
+
+
+def escribir_stack(p: Participante, out: Path, image: str, ih_image: str) -> None:
+    # Se crean aqui para que sean del usuario: si los crea Docker al montarlos, son de root.
+    for carpeta in ("keys", "vault/config", "vault/keys"):
+        (out / carpeta).mkdir(parents=True, exist_ok=True)
+    (out / "vault" / "keys").chmod(0o700)
+
+    (out / "db-init.sql").write_text(f'CREATE DATABASE "{IH_DB}";\n')
+    (out / "vault" / "config" / "vault.hcl").write_text((PLANTILLAS / "vault.hcl").read_text())
+    (out / "vault" / "vault-init.sh").write_text((PLANTILLAS / "vault-init.sh").read_text())
+
+    plantilla = (PLANTILLAS / "docker-compose.yml.tmpl").read_text()
+    (out / "docker-compose.yml").write_text(plantilla.format(
+        name=p.nombre, image=image, ih_image=ih_image, vault_image=VAULT_IMAGE,
+        db_name=p.db_name, db_user=p.db_user, db_password=p.secretos["db_password"],
+        uid=os.getuid(), gid=os.getgid(), **p.puertos,
+    ))
+
+
+# --- Comando ---
 
 def confirmar_sobrescritura(force: bool) -> None:
-    """Avisa de lo que se pierde al regenerar y pide confirmacion explicita."""
     print(
         ui.yellow("WARNING: a connector is already configured in this directory.\n")
         + "\n"
         "If you continue:\n"
-        "  - A NEW API key is generated. The one you saved will stop working.\n"
-        "  - A NEW database password is generated, which will NOT match the\n"
-        "    existing Postgres volume. The connector will not start until you\n"
-        "    delete that volume with `docker compose down -v`, which ERASES its data.\n"
-        "  - The Ed25519 keys are left untouched: the participant identity is kept.\n",
+        "  - A NEW management API key is generated. The one you saved will stop working.\n"
+        "  - The database password, the vault token, the IdentityHub super-user key\n"
+        "    and the STS client secret are kept, so the existing data still works.\n"
+        "  - Changing --host or --port-base changes the participant DID: the\n"
+        "    participant would have to be registered again (`docker compose down -v`).\n",
         file=sys.stderr,
     )
     if force:
@@ -198,8 +248,7 @@ def confirmar_sobrescritura(force: bool) -> None:
         return
     if not sys.stdin.isatty():
         ui.fail("Cancelled: no terminal to confirm on. Use --force if you are sure.")
-    respuesta = input("Type 'yes' to continue: ").strip().lower()
-    if respuesta not in {"yes", "y"}:
+    if input("Type 'yes' to continue: ").strip().lower() not in {"yes", "y"}:
         raise SystemExit("Cancelled. Nothing was modified.")
 
 
@@ -207,109 +256,54 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--participant-id", required=True, type=participant_id,
                    help="Short name: lowercase letters, digits and hyphens (inferia, acme-labs...).")
     p.add_argument("--host", required=True, help="Public IP or domain of THIS server.")
+    p.add_argument("--issuer-did", required=True, type=did_valido,
+                   help="DID of the trusted credential issuer (ask the dataspace authority).")
     p.add_argument("--image", default=IMAGE,
                    help=f"Connector image to deploy (default: {IMAGE}).")
+    p.add_argument("--ih-image", default=IH_IMAGE,
+                   help=f"IdentityHub image to deploy (default: {IH_IMAGE}).")
     p.add_argument("--force", action="store_true",
                    help="Regenerate without asking (for non-interactive use).")
-    p.add_argument("--registry-url", required=True,
-                   help="URL of the BITDS participant registry the connector talks to.")
     p.add_argument("--port-base", type=int, default=None,
                    help="Port block base. Defaults to the one already deployed here, "
                         "or the first free block on the server.")
-    p.add_argument("--country", required=True, type=str.lower, choices=sorted(EU_COUNTRIES),
-                   metavar="COD", help="Country as ISO alpha-3. List them: --list-countries")
-    p.add_argument("--entity-type", required=True, choices=ENTITY_TYPES,
-                   help="Participant entity type.")
-    p.add_argument("--location", default="eu", type=str.lower,
-                   help="Participant location claim (default: eu).")
-    p.add_argument("--list-countries", action=ListarPaises, nargs=0,
-                   help="Show the 27 EU countries and exit.")
+
+
+def mostrar(p: Participante, args: argparse.Namespace, out: Path) -> None:
+    ui.title(f"Connector '{p.nombre}' configured in {out}")
+    ui.field("Participant DID", p.did)
+    ui.field("Trusted issuer", p.issuer_did)
+    ui.field("Connector image", args.image)
+    ui.field("IdentityHub image", args.ih_image)
+    ui.field("Ports", f"http={p.puertos['http']} management={p.puertos['management']} "
+                      f"protocol={p.puertos['protocol']} public={p.puertos['public']}")
+    ui.field("IdentityHub ports", f"credentials={p.puertos['ih_credentials']} "
+                                  f"did={p.puertos['ih_did']} "
+                                  f"identity={p.puertos['ih_identity']} (127.0.0.1 only)")
+    ui.field("API key", p.secretos["api_key"])
+    print(f"\nNext step: {ui.cyan(PROG + ' up')}")
 
 
 def run(args: argparse.Namespace) -> None:
-
-    # Un host de loopback deja el conector arrancado pero inalcanzable desde fuera.
     if args.host.lower() in {"localhost", "127.0.0.1", "0.0.0.0"}:
         ui.fail(f"'{args.host}' is not a valid --host: use the public IP or domain of the server.")
 
-    name = args.participant_id
-    imagen = args.image
-    did = f"did:web:bitds.eu:participant:{name}:public:did"
-    api_key = secrets.token_hex(32)
-    db_password = secrets.token_hex(16)
-    db_name = f"participant-{name}-db"
-    db_user = f"participant-{name}"
-
     out = Path.cwd()
-    props = out / "provider_config_secret.properties"
+    props = out / info.PROPS_FILE
+    ih_props = out / info.IH_PROPS_FILE
 
-    # Antes de tocar nada: confirmar si se pisa un despliegue y decidir los puertos.
-    base_previa = base_configurada(props) if props.exists() else None
     if props.exists():
         confirmar_sobrescritura(args.force)
-    ports = derivar_puertos(elegir_base(args.port_base, base_previa))
 
-    # 1. El .properties: la plantilla base (con valores de relleno)
-    #    y encima las claves concretas de este despliegue.
-    props.write_text(BASE_PROPERTIES.read_text())
-    set_properties(props, {
-        "edc.participant.id": did,
-        "edc.participant.context.id": name,
-        "edc.hostname": f"http://{args.host}",
-        "web.http.port": ports["http"],
-        "web.http.management.port": ports["management"],
-        "web.http.protocol.port": ports["protocol"],
-        "web.http.public.port": ports["public"],
-        "web.http.control.port": ports["control"],
-        "web.http.version.port": ports["version"],
-        "web.http.management.auth.key": api_key,
-        "web.http.signaling.port": ports["signaling"],
-        "edc.dsp.callback.address": f"http://{args.host}:{ports['protocol']}/protocol",
-        "edc.dataplane.api.public.baseurl": f"http://{args.host}:{ports['public']}/public",
-        "edc.dataplane.proxy.public.endpoint": f"http://{args.host}:{ports['public']}/public",
-        # El conector se llama a si mismo: su propio host y el puerto http dinamico.
-        "edc.participant.eidas.url": f"http://{args.host}:{ports['http']}/api/vp_token",
-        # Postgres vive en el mismo compose: se resuelve por nombre de servicio.
-        "edc.datasource.default.user": db_user,
-        "edc.datasource.default.password": db_password,
-        "edc.datasource.default.url": f"jdbc:postgresql://db:5432/{db_name}",
-        "edc.participant.registry.url": args.registry_url,
-        "edc.participant.claims": "identity/claims.json",
-        "edc.participant.private.key": "identity/ed25519_private.pem",
-        "edc.participant.public.key": "identity/ed25519_public.pem",
-    })
-    props.chmod(0o600)  # lleva la API key y la password de la BD
+    participante = Participante(
+        nombre=args.participant_id,
+        host=args.host,
+        issuer_did=args.issuer_did,
+        puertos=derivar_puertos(elegir_base(args.port_base, base_configurada(props))),
+        secretos=generar_secretos(propiedades.leer(props), propiedades.leer(ih_props)),
+    )
 
-    # 2. Los claims del participante.
-    claims = json.loads(DEFAULT_CLAIMS.read_text())
-    claims[NS + "country"] = args.country
-    claims[NS + "location"] = args.location
-    claims[NS + "entity_type"] = args.entity_type
-    (out / "claims.json").write_text(json.dumps(claims, indent=2) + "\n")
-
-    # 3. El compose, con los puertos y la imagen ya sustituidos.
-    (out / "docker-compose.yml").write_text(COMPOSE_TEMPLATE.read_text().format(
-        name=name, image=imagen, db_name=db_name, db_user=db_user,
-        db_password=db_password, http=ports["http"], management=ports["management"],
-        protocol=ports["protocol"], public=ports["public"],
-    ))
-
-    # 4. El fichero del VP token, vacio. El conector lo espera en
-    #    /identity/vptoken.txt; si ya existe se deja tal cual.
-    (out / "vptoken.txt").touch()
-
-    ui.title(f"Connector '{name}' configured in {out}")
-    ui.field("Participant DID", did)
-    ui.field("Image", imagen)
-    ui.field("Ports", f"http={ports['http']} management={ports['management']} "
-                      f"protocol={ports['protocol']} public={ports['public']}")
-    ui.field("API key", api_key)
-    ui.field("Claims", f"country={args.country} ({EU_COUNTRIES[args.country]}) "
-                       f"location={args.location} entity_type={args.entity_type}")
-
-    # En un despliegue nuevo aun no hay claves: las crea key-init durante el `up`.
-    # Al regenerar la config si existen, porque no se tocan.
-    clave = info.leer_clave_publica()
-    ui.field("Public key", clave if clave else ui.dim(f"created by `{PROG} up`"))
-
-    print(f"\nNext step: {ui.cyan(PROG + ' up')}")
+    escribir_conector(participante, props)
+    escribir_identityhub(participante, ih_props)
+    escribir_stack(participante, out, args.image, args.ih_image)
+    mostrar(participante, args, out)
