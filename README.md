@@ -21,15 +21,18 @@ The tool ships as a single **zipapp** with no third-party dependencies. No `pip`
 
 ## Quick start
 
+The DCP version is published as a **pre-release**, so it is downloaded by its tag: `releases/latest` still points to the previous version, without DCP.
+
 ```bash
 # Download and verify
-curl -LO https://github.com/bitds/connector/releases/latest/download/connector.pyz
-curl -LO https://github.com/bitds/connector/releases/latest/download/connector.pyz.sha256
+curl -LO https://github.com/bitds/connector/releases/download/v0.2.0-dcp.1/connector.pyz
+curl -LO https://github.com/bitds/connector/releases/download/v0.2.0-dcp.1/connector.pyz.sha256
 sha256sum -c connector.pyz.sha256
 
 # Install
 chmod +x connector.pyz
 sudo install -m 755 connector.pyz /usr/local/bin/connector
+connector --version   # connector 0.2.0-dcp.1
 
 # Create the deployment directory and deploy
 mkdir ~/connector && cd ~/connector
