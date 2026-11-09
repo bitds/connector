@@ -32,7 +32,7 @@ OFFSETS = {"http": 1, "management": 3, "protocol": 4, "control": 5, "version": 6
            "signaling": 7, "ih_http": 11, "ih_identity": 12, "ih_credentials": 13,
            "ih_did": 14, "ih_sts": 15, "public": 101}
 
-# Los que se abren en el host (ih_identity solo en 127.0.0.1). Todos deben estar libres.
+# Los que se abren en el host. Todos deben estar libres.
 PUBLICADOS = ("http", "management", "protocol", "public",
               "ih_credentials", "ih_did", "ih_identity")
 
@@ -279,7 +279,7 @@ def mostrar(p: Participante, args: argparse.Namespace, out: Path) -> None:
                       f"protocol={p.puertos['protocol']} public={p.puertos['public']}")
     ui.field("IdentityHub ports", f"credentials={p.puertos['ih_credentials']} "
                                   f"did={p.puertos['ih_did']} "
-                                  f"identity={p.puertos['ih_identity']} (127.0.0.1 only)")
+                                  f"identity={p.puertos['ih_identity']}")
     ui.field("API key", p.secretos["api_key"])
     print(f"\nNext step: {ui.cyan(PROG + ' up')}")
 

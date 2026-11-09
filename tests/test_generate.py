@@ -174,7 +174,7 @@ class GenerateCompleto(unittest.TestCase):
         compose = (d / "docker-compose.yml").read_text()
         self.assertIn('name: "acme-labs"', compose)
         self.assertIn('"18101:18101"', compose)
-        self.assertIn('"127.0.0.1:18012:18012"', compose)
+        self.assertIn('"18012:18012"', compose)
         self.assertIn(f'image: "{generate.IMAGE}"', compose)
         self.assertIn(f'image: "{generate.IH_IMAGE}"', compose)
         self.assertNotIn("{", compose)  # ningun marcador sin sustituir

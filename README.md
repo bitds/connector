@@ -51,7 +51,7 @@ connector up
 |---|---|
 | `generate` | Writes the configuration files into the current directory |
 | `up` | Pulls the images, starts the stack, registers the participant and waits until the connector is actually running |
-| `info` | Prints DID, ports, keys and the state of the connector and the IdentityHub |
+| `info` | Prints DID, ports, keys, the Credential Service and Identity API URLs, and the state of the connector and the IdentityHub |
 
 Run `connector <command> --help` for all options.
 
@@ -81,9 +81,11 @@ All ports come from one block: for base 18000 they are
 | 18101 | connector data plane (public) | yes |
 | 18013 | IdentityHub Credential Service | yes |
 | 18014 | IdentityHub DID document | yes |
-| 18012 | IdentityHub Identity API (administration) | only on `127.0.0.1` |
+| 18012 | IdentityHub Identity API (administration) | yes |
 
 If any of them is taken, the next base (+200) is tried. With an explicit `--port-base`, a busy port is an error. Vault, PostgreSQL and the IdentityHub STS are not published: they are only reachable inside the Compose network.
+
+The Identity API accepts the IdentityHub API key shown by `info`, which can administer every participant in the IdentityHub. Restrict its port with a firewall to the machines that need it.
 
 The DID port is part of the DID, so changing `--host` or `--port-base` changes the identity of the participant.
 
@@ -93,7 +95,7 @@ The DID port is part of the DID, so changing `--host` or `--port-base` changes t
 Participant
   Connector             running
   IdentityHub           running
-  DID                   did:web:203.0.113.10%3A18014:inferia
+  DID (ID de conexión)  did:web:203.0.113.10%3A18014:inferia
   DID document          http://203.0.113.10:18014/inferia/did.json
   DSP callback          http://203.0.113.10:18004/protocol
   Trusted issuer        did:web:issuer.example.org%3A7183:issuer
@@ -106,12 +108,13 @@ Ports
   Public port           18101
   IH credentials port   18013
   IH DID port           18014
-  IH identity port      18012 (127.0.0.1 only)
+  IH identity port      18012
 
 Credentials
   Management API key    e38feddb...
-  IH super-user key     c3VwZXItdXNlcg==.30zp...
+  Identity Hub API key  c3VwZXItdXNlcg==.30zp...
   Credential service    http://203.0.113.10:18013/api/credentials
+  Identity API          http://203.0.113.10:18012/api/identity
 ```
 
 ## Stopping, restarting and logs

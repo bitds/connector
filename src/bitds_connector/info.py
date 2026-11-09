@@ -39,7 +39,7 @@ def resumen(estados: dict | None = None) -> None:
     if estados is not None:
         ui.field("Connector", _pintar_estado(estados.get("provider")))
         ui.field("IdentityHub", _pintar_estado(estados.get("identityhub")))
-    ui.field("DID", did)
+    ui.field("DID (ID de conexión)", did)
     ui.field("DID document", url_did(did) or "?")
     ui.field("DSP callback", props.get("edc.dsp.callback.address", "?"))
     ui.field("Trusted issuer", props.get("edc.iam.trustedissuer.issuerservice.id", "?"))
@@ -52,13 +52,15 @@ def resumen(estados: dict | None = None) -> None:
     ui.field("Public port", props.get("web.http.public.port", "?"))
     ui.field("IH credentials port", ih.get("web.http.credentials.port", "?"))
     ui.field("IH DID port", ih.get("web.http.did.port", "?"))
-    ui.field("IH identity port", f"{ih.get('web.http.identity.port', '?')} (127.0.0.1 only)")
+    ui.field("IH identity port", ih.get("web.http.identity.port", "?"))
 
     ui.title("Credentials")
     ui.field("Management API key", props.get("web.http.management.auth.key", "?"))
-    ui.field("IH super-user key", ih.get("edc.ih.api.superuser.key", "?"))
+    ui.field("Identity Hub API key", ih.get("edc.ih.api.superuser.key", "?"))
     ui.field("Credential service", f"http://{props.get('edc.hostname', '?')}:"
                                    f"{ih.get('web.http.credentials.port', '?')}/api/credentials")
+    ui.field("Identity API", f"http://{props.get('edc.hostname', '?')}:"
+                             f"{ih.get('web.http.identity.port', '?')}/api/identity")
 
 
 def run(args=None) -> None:

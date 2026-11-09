@@ -74,8 +74,8 @@ services:
       # Publicos: otros conectores resuelven aqui el DID y piden presentaciones.
       - "{ih_credentials}:{ih_credentials}"
       - "{ih_did}:{ih_did}"
-      # Identity API (administracion): solo desde este servidor.
-      - "127.0.0.1:{ih_identity}:{ih_identity}"
+      # Identity API (administracion).
+      - "{ih_identity}:{ih_identity}"
     secrets:
       - identityhub_config_secret
     entrypoint: ["java", "-Dedc.fs.config=/run/secrets/identityhub_config_secret", "-jar", "/identity-hub.jar"]

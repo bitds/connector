@@ -1,8 +1,8 @@
 # Contexto: herramienta `connector` (bitDS)
 
 > **Rama `dcp`**: el conector usa DCP en vez del registry + claims de bitDS.
-> Lo que sigue en este documento describe la version anterior; donde choque,
-> manda esta seccion.
+> La seccion "Los tres comandos" esta al dia con esta rama. El resto del
+> documento describe la version anterior; donde choque, manda esta seccion.
 >
 > - Modulos: `generate.py` (escribe la config), `up.py` (la secuencia de
 >   arranque), `identityhub.py` (alta del participante en el IH), `stack.py`
@@ -17,8 +17,8 @@
 >   `--location`, y no escribe `claims.json` ni `vptoken.txt`.
 > - DID: `did:web:<host>%3A<ih_did>:<name>`. El puerto va dentro del DID, por
 >   eso se reusa la base de puertos al regenerar.
-> - Puertos del IH en el mismo bloque: +11 health, +12 identity (solo
->   127.0.0.1), +13 credentials, +14 did, +15 sts (interno).
+> - Puertos del IH en el mismo bloque: +11 health, +12 identity
+>   (publicado), +13 credentials, +14 did, +15 sts (interno).
 > - `up` levanta primero `identityhub`, da de alta al participante por la
 >   Identity API (super-user) y guarda el `clientSecret` del STS en
 >   `bitds.sts.client.secret`; el conector lo mete en su vault en memoria
@@ -97,54 +97,69 @@ abajo). up.py e info.py no tienen tests: dependen de Docker.
 ## Los tres comandos
 
 ### `generate`
-Escribe 4 ficheros en el **directorio actual** y no toca Docker:
-`provider_config_secret.properties` (modo 600, lleva API key y password de BD),
-`claims.json`, `docker-compose.yml`, y `vptoken.txt` vacio.
+Escribe en el **directorio actual** y no toca Docker:
+`provider_config_secret.properties` e `identityhub_config_secret.properties`
+(modo 600, llevan API keys, passwords y token del vault), `docker-compose.yml`,
+`db-init.sql`, `vault/config/vault.hcl`, `vault/vault-init.sh` y las carpetas
+`keys/` y `vault/keys/` (700). Las carpetas se crean aqui para que sean del
+usuario: si las crea Docker al montarlas, son de root.
 
-Argumentos obligatorios: `--participant-id`, `--host`, `--registry-url`,
-`--country` (ISO alpha-3 de los 27 de la UE), `--entity-type`
-(public|private|ngo). Opcionales: `--image`, `--port-base`, `--location`
-(default `eu`), `--force`, `--list-countries`.
+Argumentos obligatorios: `--participant-id`, `--host` y `--issuer-did` (DID del
+issuer de confianza de `MembershipCredential`). Opcionales: `--image`,
+`--ih-image`, `--port-base` y `--force`. Ya no existen `--registry-url`,
+`--country`, `--entity-type`, `--location` ni `--list-countries`.
 
 Detalles que importan:
 - Rechaza `--host` de loopback (localhost/127.0.0.1/0.0.0.0): el conector
   arrancaria pero quedaria inalcanzable, fallo que se manifiesta tarde.
-- DID generado: `did:web:bitds.eu:participant:<name>:public:did`.
-- API key = `secrets.token_hex(32)`, password de BD = `token_hex(16)`.
+- DID generado: `did:web:<host>%3A<ih_did>:<participant-id>`.
+- Secretos: API key de management = `token_hex(32)`, password de BD =
+  `token_hex(16)`, token del vault = `token_hex(24)`, clave del super-user del
+  IH = `base64("super-user") + "." + base64(32 bytes aleatorios)`.
 - **Puertos automaticos**: bloque derivado de una base con OFFSETS
-  `{http:+1, management:+3, protocol:+4, control:+5, version:+6, public:+101}`.
-  Solo se publican http/management/protocol/public; control y version viven
-  dentro de la red de compose. Se prueban con `bind()`; si alguno esta ocupado
-  se busca la siguiente base en pasos de 200, entre 18000 y 19999.
+  `{http:+1, management:+3, protocol:+4, control:+5, version:+6, signaling:+7,
+  ih_http:+11, ih_identity:+12, ih_credentials:+13, ih_did:+14, ih_sts:+15,
+  public:+101}`. Se publican http/management/protocol/public y
+  ih_credentials/ih_did/ih_identity; el resto vive dentro de la red de compose.
+  Se prueban con `bind()`; si alguno esta ocupado se busca la siguiente base en
+  pasos de 200, entre 18000 y 19999.
   Prioridad: `--port-base` explicito > la base ya desplegada aqui > primera libre.
-  Reusar la previa es deliberado: regenerar no debe cambiarle los puertos a un
-  conector ya registrado.
-- Si ya hay un despliegue, avisa y pide confirmacion explicita ('yes'), porque
-  se pierde la API key y la password de BD (habria que borrar el volumen con
-  `down -v`). Las claves Ed25519 **no** se tocan: la identidad se conserva.
-  Sin TTY aborta salvo `--force`.
-- Imagen por defecto: `ghcr.io/bitds/provider-base:latest` (paquete publico,
-  sin credenciales). Es una tag movil; el valor concreto queda congelado en el
-  docker-compose.yml que se escribe.
+  Reusar la previa es obligado: el puerto del DID va dentro del propio DID.
+- Si ya hay un despliegue, avisa y pide confirmacion explicita ('yes'). Solo
+  cambia la API key de management; password de BD, token del vault, clave del
+  super-user y secret del STS se conservan. Sin TTY aborta salvo `--force`.
+- Imagenes por defecto fijadas a `ghcr.io/bitds/provider-base:dcp-ffdfe0c` y
+  `ghcr.io/bitds/identity-hub:dcp-ffdfe0c`: tienen que ir a la par.
 
 ### `up`
-`docker compose pull` + `up -d` + espera activa. Lo que anade sobre compose:
-- Si el registry no responde pero las imagenes estan en local, continua con un
-  warning; solo es fatal si ademas falta alguna.
-- **Espera a que el conector siga arriba**, no a verlo 'running' una vez. Usa
-  `docker inspect` (no `compose ps --status running`) porque con
-  `restart: unless-stopped` un contenedor que muere y revive pasa por 'running'
-  entre reinicios. `RestartCount > 0` = fallo inmediato. Exige 2 sondeos
-  estables seguidos. Timeout por defecto 120s (`--timeout`).
-- Si falla, imprime las ultimas 10 lineas del log del servicio `provider`.
-- Termina imprimiendo la **clave publica Ed25519**, que es lo que el
-  participante envia a BITDS para registrarse.
+La secuencia, en este orden:
+1. Comprueba que estan los ficheros de `generate` y que Docker responde.
+2. `docker compose pull`. Si el registry de imagenes no responde pero las
+   imagenes estan en local, continua con un warning; solo es fatal si ademas
+   falta alguna.
+3. Levanta `identityhub` (con vault y db) y lo recrea si su `.properties` es
+   mas nuevo que el arranque del contenedor.
+4. Da de alta al participante en el IH por la Identity API, como super-user y
+   via `127.0.0.1`, y guarda el `clientSecret` del STS en
+   `bitds.sts.client.secret`. Si el participante ya existe y falta el secret,
+   aborta: el IH solo lo devuelve en el alta.
+5. Levanta el resto (`provider`) y lo recrea si su configuracion cambio.
+6. **Espera a que el conector siga arriba**, no a verlo 'running' una vez. Usa
+   `docker inspect` (no `compose ps --status running`) porque con
+   `restart: unless-stopped` un contenedor que muere y revive pasa por 'running'
+   entre reinicios. `RestartCount > 0` = fallo inmediato. Exige 2 sondeos
+   estables seguidos. Timeout por defecto 120s (`--timeout`).
+7. Imprime el mismo resumen que `info`.
+
+Si algo falla, imprime las ultimas 10 lineas del log del servicio afectado.
 
 ### `info`
-Lee el `.properties` y `claims.json` del directorio y muestra identidad,
-puertos, API key, claims, clave publica y estado del contenedor. Funciona este
-el conector arrancado o no. Es tambien el modulo que usan `generate` y `up`
-para imprimir su resumen, para no duplicar el formato en tres sitios.
+Lee los dos `.properties` del directorio y muestra estado de `provider` e
+`identityhub`, DID y URL de su did.json, callback DSP, issuer de confianza, si
+el STS esta registrado, puertos, API key de management, clave del super-user
+del IH y las URLs del Credential Service y de la Identity API. Funciona este el
+stack arrancado o no. Es tambien el modulo que usan `generate` y `up` para su
+resumen, para no duplicar el formato.
 
 ## Modelo mental clave
 
