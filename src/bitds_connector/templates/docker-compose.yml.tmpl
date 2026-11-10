@@ -45,9 +45,19 @@ services:
       timeout: 3s
       retries: 20
 
+  # No termina: tras preparar vault se queda vigilando y lo desella si vuelve
+  # sellado. Con unless-stopped Docker lo relanza tras un reinicio de la maquina,
+  # que es cuando vault arranca sellado y nadie ejecuta `up`.
   vault-init:
     image: "{vault_image}"
-    restart: "no"
+    restart: unless-stopped
+    healthcheck:
+      # El script crea /tmp/ready al acabar la preparacion de vault.
+      test: ["CMD-SHELL", "test -f /tmp/ready"]
+      interval: 3s
+      timeout: 3s
+      start_period: 60s
+      retries: 20
     depends_on:
       vault:
         condition: service_healthy
@@ -69,7 +79,7 @@ services:
       db:
         condition: service_healthy
       vault-init:
-        condition: service_completed_successfully
+        condition: service_healthy
     ports:
       # Publicos: otros conectores resuelven aqui el DID y piden presentaciones.
       - "{ih_credentials}:{ih_credentials}"

@@ -79,7 +79,12 @@ def run(args: argparse.Namespace) -> None:
     descargar_imagenes()
 
     ui.step("Starting vault and IdentityHub...")
-    compose("up", "-d", "identityhub")
+    r = compose("up", "-d", "identityhub", check=False)
+    if r.returncode != 0 and "vault-init" in r.stderr:
+        # Compose solo dice "is unhealthy"; el motivo esta en el log de vault-init.
+        stack.abortar_con_logs("Vault could not be prepared.", "vault-init")
+    elif r.returncode != 0:
+        ui.fail(f"`docker compose up` failed: {(r.stderr or r.stdout).strip()}")
     stack.recrear_si_desfasado("identityhub", info.IH_PROPS_FILE)
 
     ui.step("Registering the participant in the IdentityHub...")

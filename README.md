@@ -8,7 +8,7 @@ The participant uses **DCP** (Decentralized Claims Protocol): its identity is a 
 |---|---|
 | `provider` | the EDC connector |
 | `identityhub` | DID document, Credential Service and STS of the participant |
-| `vault` + `vault-init` | HashiCorp Vault holding the IdentityHub keys and secrets, unsealed on every start |
+| `vault` + `vault-init` | HashiCorp Vault holding the IdentityHub keys and secrets, kept unsealed by `vault-init` (also after a reboot) |
 | `db` | PostgreSQL for the connector and the IdentityHub |
 | `key-init` | creates the Ed25519 key pair the connector signs its EDR tokens with |
 
@@ -133,10 +133,12 @@ identityhub_config_secret.properties  IdentityHub configuration (mode 600)    �
 docker-compose.yml                    the stack                               ← generate
 db-init.sql                           creates the IdentityHub database        ← generate
 vault/config/vault.hcl                vault configuration                     ← generate
-vault/vault-init.sh                   initializes and unseals vault           ← generate
+vault/vault-init.sh                   initializes vault and keeps it unsealed ← generate
 vault/keys/init.txt                   vault unseal key and root token (600)   ← up
 keys/ed25519_private.pem              EDR token private key (600, root)       ← up
 keys/ed25519_public.pem               EDR token public key                    ← up
 ```
+
+**After a reboot of the server** everything comes back by itself, as long as Docker starts on boot (`sudo systemctl enable docker`). Vault always starts sealed, so `vault-init` does not exit like `key-init`: it stays running and unseals vault every time it comes back sealed. That is why `docker compose ps` shows it as `running (healthy)`.
 
 **Back up `vault/keys/init.txt`.** Vault starts sealed every time and this file is the only way to unseal it: without it, the keys of the participant in the IdentityHub are lost. The connector container only mounts `keys/`, never the vault keys.

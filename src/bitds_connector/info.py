@@ -39,6 +39,7 @@ def resumen(estados: dict | None = None) -> None:
     if estados is not None:
         ui.field("Connector", _pintar_estado(estados.get("provider")))
         ui.field("IdentityHub", _pintar_estado(estados.get("identityhub")))
+    ui.field("Connector URL", f"http://{props.get('edc.hostname', '?')}")
     ui.field("DID (ID de conexión)", did)
     ui.field("DID document", url_did(did) or "?")
     ui.field("DSP callback", props.get("edc.dsp.callback.address", "?"))
